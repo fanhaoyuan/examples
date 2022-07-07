@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Document</title>
+        <script src="https://cdn.jsdelivr.net/npm/fatcher/dist/fatcher.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/@fatcherjs/middleware-progress/dist/progress.min.js"></script>
+    </head>
+    <body>
+        <video id="video" controls></video>
+        <script>
+            (async function () {
+                let { data: stream } = await Fatcher.fatcher({
+                    url: `https://nickdesaulniers.github.io/netfix/demo/frag_bunny.mp4?t=${Date.now()}`,
+                    middlewares: [
+                        // 用于查看下载进度
+                        FatcherMiddlewareProgress.progress({
+                            onDownloadProgress(loaded, total) {
+                                console.log(
+                                    '已经加载数据大小',
+                                    loaded,
+                                    '总共数据大小',
+                                    total,
+                                    '当前进度',
+                                    `${((loaded / total) * 100).toFixed(2)}%`
+                                );
+                            },
+                        }),
+                    ],
+                });
+
+                const video = document.querySelector('#video');
+
+                const mediaSource = new MediaSource();
+
+                video.src = URL.createObjectURL(mediaSource);
+
+                // 转换流，可以用于转码之类的转换操作
+                const transformStream = new TransformStream({
+                    transform(chunk, controller) {
+                        // 可以用于转码
+                        controller.enqueue(chunk);
+                    },
+                });
+
+                stream = stream.pipeThrough(transformStream);
+
+                mediaSource.onsourceopen = async () => {
+                    const sourceBuffer = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.42E01E, mp4a.40.2"');
+
+                    let buffers = [];
+
+                    await Fatcher.readStreamByChunk(stream, chunk => {
+                        if (!sourceBuffer.updating) {
+                            // 加上缓冲区的数据长度
+                            const total = buffers.reduce((t, c) => c.length + t, 0) + chunk.length;
+
+                            // 新建一个 ArrayBuffer 基座
+                            const arrayBuffer = new ArrayBuffer(total);
+
+                            // ArrayBuffer 数据操作台
+                            const dataView = new DataView(arrayBuffer);
+
+                            // 合并缓存区加当前块的数据
+                            for (let i = 0, offset = 0, chunks = [...buffers, chunk]; i < chunks.length; i++) {
+                                for (let j = 0; j < chunks[i].length; j++) {
+                                    dataView.setUint8(offset, chunks[i][j]);
+                                    offset++;
+                                }
+                            }
+
+                            // 加载视频流
+                            sourceBuffer.appendBuffer(dataView.buffer);
+
+                            // 清空缓冲区
+                            buffers = [];
+
+                            return;
+                        }
+
+                        // 正在加载别的流，加入缓冲区，等下一次一起加载
+                        buffers.push(chunk);
+                    });
+
+                    console.log('视频下载完成');
+
+                    // 加载完成 告诉 mediaSource 已经加载完成了。
+                    sourceBuffer.onupdateend = () => {
+                        console.log('视频加载完成');
+
+                        mediaSource.endOfStream();
+                    };
+                };
+            })();
+        </script>
+    </body>
+</html>
